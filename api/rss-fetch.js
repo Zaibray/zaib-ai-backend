@@ -1,100 +1,46 @@
-const RSS_PATHS = [
-  "/rss",
-  "/rss.xml",
-  "/feed",
-  "/feeds",
-  "/feeds/news.xml",
-  "/rss/index.xml"
-];
+import Parser from "rss-parser";
 
-function normalizeUrl(input) {
-  if (!input.startsWith("http")) {
-    return "https://" + input;
-  }
-  return input;
-}
+const parser = new Parser();
 
 export default async function handler(req, res) {
   try {
-    let { url } = req.query;
+    const { url } = req.query;
 
     if (!url) {
-      return res.status(400).json({ success: false, error: "URL required" });
+      return res.status(400).json({ success: false, error: "URL is required" });
     }
 
-    const baseUrl = normalizeUrl(url);
+    // Auto RSS detect
+    const rssUrl = url.includes("rss")
+      ? url
+      : `https://${url.replace(/\/$/, "")}/rss/index.xml`;
 
-    let rssUrl = null;
-    let xmlText = null;
+    const feed = await parser.parseURL(rssUrl);
 
-    for (const path of RSS_PATHS) {
-      try {
-        const testUrl = baseUrl + path;
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3000);
-
-        const response = await fetch(testUrl, {
-          signal: controller.signal,
-          headers: { "User-Agent": "Zaib.AI RSS Finder" }
-        });
-
-        clearTimeout(timeout);
-
-        if (!response.ok) continue;
-
-        const text = await response.text();
-        if (text.includes("<rss") || text.includes("<feed")) {
-          rssUrl = testUrl;
-          xmlText = text;
-          break;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    if (!rssUrl) {
-      return res.status(200).json({
+    if (!feed?.items || feed.items.length === 0) {
+      return res.status(404).json({
         success: false,
-        error: "No RSS feed found"
+        error: "RSS loaded but no items found",
       });
     }
 
-    const itemMatch = xmlText.match(/<item>([\s\S]*?)<\/item>/);
-    if (!itemMatch) {
-      return res.status(200).json({
-        success: false,
-        error: "No RSS items found"
-      });
-    }
+    const latest = feed.items[0];
 
-    const item = itemMatch[1];
-
-    const extract = (tag) => {
-      const match = item.match(
-        new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`)
-      );
-      return match
-        ? match[1].replace(/<!\\[CDATA\\[|\\]\\]>/g, "").trim()
-        : "";
-    };
-
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
+      source: feed.title,
       rss: rssUrl,
       latest: {
-        title: extract("title"),
-        description: extract("description"),
-        link: extract("link"),
-        pubDate: extract("pubDate")
-      }
+        title: latest.title || "",
+        description: latest.contentSnippet || latest.content || "",
+        link: latest.link || "",
+        pubDate: latest.pubDate || "",
+      },
     });
-
-  } catch (err) {
-    return res.status(500).json({
+  } catch (error) {
+    res.status(500).json({
       success: false,
-      error: err.message
+      error: error.message,
     });
   }
 }
