@@ -1,7 +1,7 @@
 export const config = { runtime: "nodejs" };
 
 import Parser from "rss-parser";
-import * as cheerio from "cheerio"; // ✅ FIXED (no default import)
+import { load } from "cheerio";
 
 const parser = new Parser({
   headers: {
@@ -43,7 +43,7 @@ async function fetchText(url) {
 }
 
 function extractRssLinksFromHtml(html, baseUrl) {
-  const $ = cheerio.load(html);
+  const $ = load(html);
   const links = [];
 
   $('link[rel="alternate"]').each((_, el) => {
