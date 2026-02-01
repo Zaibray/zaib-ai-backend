@@ -1,13 +1,16 @@
-export const config = { runtime: "nodejs" };
+// api/rss-fetch.js
 
-import Parser from "rss-parser";
-import cheerio from "cheerio";
+const Parser = require("rss-parser");
+const cheerio = require("cheerio");
+
+module.exports.config = { runtime: "nodejs" };
 
 const parser = new Parser({
   headers: {
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/rss+xml,*/*;q=0.8",
+    Accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,application/rss+xml,*/*;q=0.8",
   },
   timeout: 20000,
 });
@@ -16,7 +19,6 @@ function normalizeToHttps(input) {
   let u = String(input || "").trim();
   if (!u) return "";
   if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
-  // remove trailing slash
   u = u.replace(/\/$/, "");
   return u;
 }
@@ -24,6 +26,7 @@ function normalizeToHttps(input) {
 async function fetchText(url) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), 20000);
+
   try {
     const res = await fetch(url, {
       redirect: "follow",
@@ -31,10 +34,11 @@ async function fetchText(url) {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-        "Accept":
+        Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,application/rss+xml,*/*;q=0.8",
       },
     });
+
     if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
     return await res.text();
   } finally {
@@ -47,30 +51,25 @@ function extractRssLinksFromHtml(html, baseUrl) {
   const links = [];
 
   $('link[rel="alternate"]').each((_, el) => {
-    const type = ($(el).attr("type") || "").toLowerCase();
+    const type = String($(el).attr("type") || "").toLowerCase();
     const href = $(el).attr("href");
     if (!href) return;
 
-    // RSS or Atom
     if (type.includes("rss") || type.includes("atom") || type.includes("xml")) {
       try {
-        const abs = new URL(href, baseUrl).toString();
-        links.push(abs);
+        links.push(new URL(href, baseUrl).toString());
       } catch {}
     }
   });
 
-  // also try common feed anchors sometimes used
   $('a[href*="rss"], a[href*="feed"], a[href*=".xml"]').each((_, el) => {
     const href = $(el).attr("href");
     if (!href) return;
     try {
-      const abs = new URL(href, baseUrl).toString();
-      links.push(abs);
+      links.push(new URL(href, baseUrl).toString());
     } catch {}
   });
 
-  // unique
   return Array.from(new Set(links));
 }
 
@@ -84,19 +83,22 @@ async function tryParseAny(urls) {
       lastErr = e;
     }
   }
-  if (lastErr) throw lastErr;
-  throw new Error("No valid RSS feeds found");
+  throw lastErr || new Error("No valid RSS feeds found");
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     const { url } = req.query;
-    if (!url) return res.status(400).json({ success: false, error: "URL is required" });
+    if (!url) {
+      return res.status(400).json({ success: false, error: "URL is required" });
+    }
 
     const base = normalizeToHttps(url);
-    if (!base) return res.status(400).json({ success: false, error: "Invalid URL" });
+    if (!base) {
+      return res.status(400).json({ success: false, error: "Invalid URL" });
+    }
 
-    // 1) If user already gave an RSS link, try directly
+    // If user already gave an RSS-ish link, try directly
     const looksLikeRss = /(\.xml|rss|feed|atom)/i.test(base);
     if (looksLikeRss) {
       const { feed } = await tryParseAny([base]);
@@ -113,11 +115,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // 2) Fetch homepage HTML and discover RSS links
+    // Fetch homepage and discover RSS links
     const html = await fetchText(base);
     const discovered = extractRssLinksFromHtml(html, base);
 
-    // 3) If nothing discovered, try common guesses
+    // common guesses
     const guesses = [
       `${base}/feed`,
       `${base}/rss`,
@@ -129,9 +131,7 @@ export default async function handler(req, res) {
       `${base}/feeds/posts/default?alt=rss`, // blogger
     ];
 
-    const candidates = [...discovered, ...guesses];
-
-    const { feed, rssUrl } = await tryParseAny(candidates);
+    const { feed, rssUrl } = await tryParseAny([...discovered, ...guesses]);
     const latest = feed.items[0];
 
     return res.status(200).json({
@@ -152,4 +152,4 @@ export default async function handler(req, res) {
       error: error?.message || "Unknown error",
     });
   }
-}
+};
